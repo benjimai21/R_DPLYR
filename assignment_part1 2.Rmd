@@ -1,0 +1,442 @@
+---
+title: "prenoms_dplyr_clean_data_if-at-all_en"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+
+
+Please, submit your work in shape of a zipped folder containing an RStudio project to xhec2018@thinkr.fr 
+
+Deadline : 4th november, 11:00 PM 
+
+The name of the project should be “dplyr_firstname_lastname”.
+
+The project must contain a .Rmd file and the corresponding rendered .html file. Packages should be loaded at the top of the .Rmd file. 
+
+
+```{r include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = TRUE)
+```
+
+## Warm-up
+
+### Make sure you've installed {dplyr} >= 0.7 and {prenoms} package
+
+```{r eval=FALSE, echo=FALSE}
+
+
+install.packages("operators")
+
+```
+
+
+### Load here `{dplyr}`, `{prenoms}` and any other needed package
+
+```{r}
+
+library(dplyr)
+library(prenoms)
+library(tidyr)
+library(readr)
+library(readxl)
+
+```
+
+### Import
+
+#### prenomsdataset
+
+Using `data(prenoms)` load `prenoms` dataset from  `{prenoms}` package.
+
+```{r}
+data("prenoms")
+
+```
+
+What kind of object is `prenoms` ? 
+
+```{r}
+class(prenoms)
+
+```
+
+Explore the database using the '5-functions-to-always-run-on-a-database'
+
+```{r, eval=FALSE}
+
+
+summarise(prenoms)
+dim(prenoms)
+head(prenoms)
+View(prenoms)
+colnames(prenoms)
+
+
+```
+
+Using `glimpse`, have a look at `prenoms`'s structure.
+
+```{r}
+glimpse(prenoms)
+
+```
+
+#### Regions, departements and surfaces
+
+Load the "dpt_data_modif.csv" dataset from IGN (French public state administrative establishment founded in 1940[1] to produce and maintain geographical information for France and its overseas departments and territories) using the appropriate function. Data have been prepared for you: the surface of departement has been calculated and spatial data removed.
+
+```{r}
+depp_dataset <- read_csv("data/dpt_data_modif.csv")
+```
+
+
+#### Elementary and college schools
+
+We also fetched for you on [data.gouv.fr](https://www.data.gouv.fr/fr/datasets/adresse-et-geolocalisation-des-etablissements-denseignement-du-premier-et-second-degres/#_) the addresses of "primary and secondary schools, the administrative structures of the Ministry of National Education. Public and private sectors."
+
+1. Data preprocessing 
+    + Import the csv file : "DEPP-etab-1D2D.csv" and name it "depp_orig"
+        + Encoding is `"latin1"`
+    + Transform zip code ("code_postal_uai") into 5 characters with zeros
+    + Extract department numbers ("dpt") starting from column "code_postal_uai"
+    + Save the modifications into "depp_modif.csv"
+
+```{r}
+
+#import data
+depp_orig <- read_csv2("data/DEPP-etab-1D2D.csv")
+
+#transform zip code into 5 characters with zeros
+modif <- depp_orig
+modif <- modif %>% mutate(code_postal_uai = case_when(
+  nchar(code_postal_uai)<5 ~ paste("0", as.character(code_postal_uai), sep = ""),
+  nchar(code_postal_uai)==5 ~ as.character(code_postal_uai)
+)) %>% mutate(dpt = substr(code_postal_uai,1,2))
+
+
+#Save modficiations
+write_csv(modif, "data/depp_modif2.csv")
+#new file created 
+
+#modif %>% filter(is.na(dpt))
+#depp_orig %>% filter(is.na(code_postal_uai))
+```
+
+2. Read the pre-processed "depp_modif.csv" file
+
+```{r}
+depp_modif <- read_csv("data/depp_modif.csv")
+```
+
+
+#### Facts observed by the police services and national gendarmerie units by department
+
+We also gathered data from [data.gouv.fr](https://www.data.gouv.fr/fr/datasets/faits-constates-par-index-par-departement-et-par-annee/#_) concerning "all the facts observed by the police services and national gendarmerie units by department from 1996 to 2011"
+
+1. Data preprocessing 
+    - Import Excel sheet "2010" from "faitsconstatespardepartementde2002-a-2011.xls" file
+        + _beware of the original formatting_
+    - Copy it into "faits_2010_modif" in order to make some modifications:
+        + Delete Excel calculations:
+            + `Tout_département`, `Tout_index`
+        + Transform in long format using `gather`
+            + 4 columns : Index, Libellé, dpt, nombre
+        + save the dataframe into a csv file "faits_2010_modif.csv"
+
+```{r}
+#read the file 
+temp <- read_excel("data/faitsconstatespardepartementde2002-a-2011.xls", sheet="2010")
+
+#Remove the column "Tout departements" and the row "Tout index"
+temp2 <- temp %>%  
+  select(colnames(temp)[-3]) %>%   
+  filter(Départements != "Tout index")
+ 
+#Change name of columns with departments number
+colnames(temp2) <- temp2[1,]
+
+#remove the department row
+temp2 <- temp2 %>% 
+  filter(Index != "Index")
+
+#gather department and number into two distinct columns
+temp2 <- temp2  %>% 
+  gather(key=dpt, value=nombre, '01':'95') %>% 
+  select(Index, Libellé, dpt, nombre)
+
+#save the data frame into a csv file "faits_2010_modif.csv"
+write_csv(temp2, "data/faits_2010_modif.csv")
+
+```
+
+2. Read preprocessed file "faits_2010_modif.csv"
+
+```{r}
+faits_2010 <- read_csv("data/faits_2010_modif.csv")
+
+```
+
+
+## Analyses
+
+Some assumptions to do the exercise:
+
+- every child born in a department stays into that department until the end of college
+- every children between 11 and 14 years old is in a college
+- the number of college is constant between 2010 and 2016
+- College "à ouvrir" (i.e. "to be open") do not have children. Others have.
+
+### Filter datasets to Metropolitan France
+
+Datasets to be filtered: `prenoms`, `depp_modif`, `faits_2010_modif`, `dpt_data_modif`
+
+- Department named "2A" and "2B" should be merged to "20"
+- We only work with data in Metropolitan France, which means for "dpt" between `01` and `95` included. Others needs to be filtered.
+
+```{r}
+
+
+prenoms <- prenoms %>% 
+  #replace all 2As and 2Bs occurence by 20
+  mutate(dpt = replace(dpt,dpt %in% c("2A","2B"),"20")) %>% 
+  #group by to merge lines of dpt 20 that are similar
+  group_by(year,sex,dpt,name) %>%  
+  #get the sum 
+  summarise(n=sum(n)) %>%
+  #group by year and dpt to find proportion for dpt 20
+  group_by(year,dpt) %>% 
+  #get proportion
+  mutate(prop= n/sum(n)) %>% 
+  #create a new column of dpt as double
+  mutate(dpt_temp = as.double(dpt)) %>% 
+  #filter dpt 01 to 95
+  filter(dpt_temp >= 1 & dpt_temp <= 95) %>% 
+  #remove the temp column
+  select(-dpt_temp) %>% 
+  #sort by dpt
+  arrange(dpt) %>% 
+  ungroup()
+
+
+#same as before  
+faits_2010 <- faits_2010 %>% 
+  mutate(dpt = replace(dpt,dpt %in% c("2A","2B"),"20")) %>%
+  group_by(Index,Libellé,dpt) %>%  
+  summarise(nombre=sum(nombre)) %>% 
+  arrange(dpt) %>% 
+  ungroup()
+
+
+#just remove dpt beyong 95
+depp_modif <- depp_modif %>%
+  mutate(dpt_temp = as.double(dpt)) %>% 
+  filter(dpt_temp >= 1 & dpt_temp <= 95) %>% 
+  select(-dpt_temp) %>% 
+  arrange(dpt) %>% 
+  ungroup()
+
+#just merge 2A and 2B 
+depp_dataset <- depp_dataset %>% 
+  mutate(CODE_DEPT = replace(CODE_DEPT,CODE_DEPT %in% c("2A","2B"),"20")) %>%
+  #here we remove the columns NOM_DEPT, CODE_CHF, NOM_CHF because they differ for 2A and 2B and we want   merge them 
+  group_by(CODE_DEPT, CODE_REG, NOM_REG) %>%  
+  summarise(surface_m = sum(surface_m)) %>% 
+  ungroup()
+
+```
+
+
+### National average number of children per college in 2010 ?
+
+```{r}
+
+nb_college <- depp_modif %>% 
+  filter(denomination_principale == "COLLEGE") %>% 
+  summarise(count = n()) 
+
+
+total <- prenoms %>% 
+  filter(year >= 2010 - 14 & year <= 2010 - 11) %>% 
+  summarise(total = sum(n)) 
+
+propotion <- total/nb_college
+propotion
+```
+
+### Average number of children per college in 2010 in each department?
+
+- Arrange departments according to the calculated average in descending order
+
+```{r}
+
+#get number of children in college in 2010 per department
+nb_students_by_dpt <- prenoms %>% 
+ filter(year >= 2010 - 14 & year <= 2010 - 11) %>% 
+  group_by(dpt) %>% 
+  summarise(total = sum(n))
+
+#joint nb_student_by_dpt and depp_modif to get a column with number of children in college in 2010 per department and number of colleges per department to get the average number
+depp_modif %>% 
+  group_by(dpt) %>% 
+  summarise(nb_colleges_by_dpt = n()) %>% 
+  inner_join(nb_students_by_dpt, by = "dpt") %>% 
+  mutate(prop = total/nb_colleges_by_dpt) %>% 
+  select(dpt, prop) %>% 
+  arrange(desc(prop))
+
+
+```
+
+### Number of Facts observed by the police services in 2010 per department ? 
+
+```{r}
+
+facts_by_dpt <- faits_2010 %>% 
+  group_by(dpt) %>% 
+  summarise(nb_facts = sum(nombre))
+  
+facts_by_dpt
+
+
+```
+
+### Number of children born, number of colleges and facts related by the police services per department in 2010 ?
+
+- Group all information in the same table
+- Arrange by descending order of children, schools and facts
+
+```{r}
+
+table1 <- 
+  #1)get number of children born in 2010
+  prenoms %>% 
+  filter(year == 2010) %>% 
+  group_by(dpt) %>% 
+  summarise(nb_children = sum(n)) %>% 
+  #2)get number of colleges in 2010
+  inner_join(
+    depp_modif %>% 
+    group_by(dpt) %>% 
+    summarise(nb_colleges = n()),
+    by = "dpt") %>% 
+  #3)get number of facts in 2010
+  inner_join(
+    facts_by_dpt, 
+    by = "dpt")
+
+table1
+```
+
+### Number of children born, number of colleges and facts related by the police services per km² in 2010 by department?
+
+```{r}
+#convert surface from meters^2 to km^2
+surface_by_dpt <- depp_dataset %>% 
+  rename(dpt = CODE_DEPT, surface = surface_m) %>% 
+  select(dpt, surface) %>% 
+  mutate(surface = surface/10^6)
+
+#add a column with the surface/dpt to table1 to get all the ratios we want
+per_km <- table1 %>% 
+  inner_join(surface_by_dpt, by = "dpt") %>% 
+  mutate_at(vars(nb_children:nb_facts), funs(./surface)) %>% 
+  rename(nb_children_p_km = nb_children, nb_colleges_p_km = nb_colleges, facts_p_km = nb_facts) %>% 
+  select(-surface)
+
+per_km
+```
+
+### Is there a correlation between the number of birth and the number of facts related by the police per km² in 2010 ?
+
+```{r}
+#correlation between the number of birth and the number of facts related by the police per km² in 2010 
+cor(per_km$nb_children_p_km,per_km$facts_p_km, use = "complete.obs")
+
+#plot of the relation
+per_km %>% ggplot() + aes(x = nb_children_p_km, y = facts_p_km) +
+  geom_point()
+```
+
+### What is the mean regional density (in number/km²) of the 15 most given first names in France ?
+
+- Filter the 15 most given first names in France
+- Create a wide table with the department as observations and the 15 most given names in columns (as variables): the count is at the row-column intersection 
+- merge with the surface department infos
+- Compute the region surface and the sum of names by region
+
+```{r}
+
+#compute 15 most given names in France in 2010
+most_given_names <- 
+  prenoms %>% 
+  group_by(name) %>% 
+  summarise(total = sum(n)) %>% 
+  top_n(15, total) %>% 
+  select(name) 
+  
+
+#compute the surface for each region
+surface_by_region <- 
+  depp_dataset %>% 
+  group_by(NOM_REG) %>% 
+  summarise(surface_reg = sum(surface_m))
+
+
+temp <- 
+  prenoms %>% 
+  group_by(name, dpt) %>% 
+  summarise(total = sum(n)) %>% 
+  inner_join(most_given_names, by = "name") %>% 
+  #get the 15 most given names in columns
+  spread(key = name, value = total) %>%
+  inner_join(
+    depp_dataset %>% 
+      rename(dpt = CODE_DEPT, surface_dpt = surface_m) %>% 
+      select(dpt, surface_dpt, NOM_REG), 
+    by = "dpt") %>% 
+  inner_join(surface_by_region,
+    by = "NOM_REG")
+
+
+#replace all the NA in the column names by 0
+temp[,2:16][is.na(temp[2:16])] <- 0
+
+#add the new columns
+temp %>%   
+  mutate(sum_popular = rowSums(select(.,2:16))) %>% 
+  mutate_at(vars(surface_reg, surface_dpt), funs(./10^6)) %>% 
+  mutate(mean_regional_density = sum_popular/surface_reg)
+
+
+```
+
+#### Bonus question : map the mean regional density (in number/km²) of the 15 most given first names in France 
+
+- Use the "department" shapefile to cross information and map data
+
+```{r}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```
+
